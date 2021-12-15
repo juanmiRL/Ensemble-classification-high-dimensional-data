@@ -3969,7 +3969,7 @@ registerDoMC(cores = 11)
 repeticiones_boot <- 50
 
 # Hiperparámetros
-hiperparametros <- expand.grid(size = c(5, 10, 15, 20, 40),
+hiperparametros <- expand.grid(size = c(5, 10, 15, 20),
                                decay = c(0.01, 0.1))
 
 set.seed(86)
@@ -3998,12 +3998,12 @@ nnet_pvalue_500 <- caret::train(
   # Rango de inicialización de los pesos
   rang = c(-0.7, 0.7),
   # Número máximo de pesos
-  MaxNWts = 10000,
-  # Para que no se muestre cada iteración por pantalla
-  trace = FALSE
+  MaxNWts = 21000,
+  # Para que se muestre cada iteración por pantalla
+  trace = TRUE
 )
 
-saveRDS(object = nnet_pvalue_500, file = "nnet_pvalue_100.rds")
+saveRDS(object = nnet_pvalue_500, file = "nnet_pvalue_500.rds")
 registerDoMC(cores = 1)
 
 nnet_pvalue_500
@@ -4144,18 +4144,18 @@ xgbm_pvalue_500 <- caret::train(
 saveRDS(object = xgbm_pvalue_500, file = "xgbm_pvalue_500.rds")
 registerDoMC(cores = 1)
 
-xgbm_pvalue_100
+xgbm_pvalue_500
 
 # REPRESENTACIÓN GRÁFICA
 # ==============================================================================
-ggplot(xgbm_pvalue_100, highlight = TRUE) +
+ggplot(xgbm_pvalue_500, highlight = TRUE) +
   labs(title = "Evolución del accuracy del modelo XGBM") +
   theme_bw()
 
 # PREDICCIONES SOBRE TEST 
 # ==============================================================================
-predic_xgbm_pvalue_100 <- predict(object = xgbm_pvalue_100, newdata = x_test)
-caret::confusionMatrix(predic_xgbm_pvalue_100, y_test)
+predic_xgbm_pvalue_500 <- predict(object = xgbm_pvalue_500, newdata = x_test)
+caret::confusionMatrix(predic_xgbm_pvalue_500, y_test)
 
 
 #===============================================================================
