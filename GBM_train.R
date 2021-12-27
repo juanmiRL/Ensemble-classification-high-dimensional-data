@@ -760,8 +760,11 @@ caret::confusionMatrix(predic_GBM_logitBoost_pvalue_50, y_test)
 # DEFINICIÓN DEL ENTRENAMIENTO
 #===============================================================================
 
-stacking_df <- cbind(x_train[, gbm_filter_anova_pvalue_50],x_train$Class)
+stacking_df <- cbind(x_train[, gbm_filter_anova_pvalue_50], x_train$Class)
 names(stacking_df) [51] <- "Class"
+levels(stacking_df$Class)
+levels(stacking_df$Class) <- make.names(levels(stacking_df$Class))
+
 
 trainControl <- trainControl(method = "repeatedcv", number = 5, repeats = 3,
                              savePredictions = "all", classProbs = TRUE,
@@ -770,9 +773,6 @@ trainControl <- trainControl(method = "repeatedcv", number = 5, repeats = 3,
 
 # Run multiplealgorithms in one call.
 algorithm <- c("nnet","rf","svmRadial","xgbTree","hdda","LogitBoost")
-
-levels(stacking_df$Class)
-levels(stacking_df$Class) <- make.names(levels(stacking_df$Class))
 
 set.seed(86)
 models <- caretList(Class ~ ., data = stacking_df, 
@@ -852,7 +852,7 @@ saveRDS(object = GBM_rf_pvalue_100, file = "GBM_rf_pvalue_100.rds")
 registerDoMC(cores = 1)
 
 
-GBM_rf_pvalue_50
+GBM_rf_pvalue_100
 
 # GRAPHIC REPRESENTATION
 # ==============================================================================
@@ -1277,7 +1277,7 @@ GBM_hdda_pvalue_100 <- caret::train(
 saveRDS(object = GBM_hdda_pvalue_100, file = "GBM_hdda_pvalue_100.rds")
 registerDoMC(cores = 1)
 
-GBM_hdda_pvalue_50
+GBM_hdda_pvalue_100
 
 # GRAPHIC REPRESENTATION
 # ==============================================================================
@@ -1370,6 +1370,11 @@ caret::confusionMatrix(predic_GBM_logitBoost_pvalue_100, y_test)
 # DEFINICIÓN DEL ENTRENAMIENTO
 #===============================================================================
 
+stacking_df <- cbind(x_train[,gbm_filter_anova_pvalue_100],x_train$Class)
+names(stacking_df) [101] <- "Class"
+levels(stacking_df$Class)
+levels(stacking_df$Class) <- make.names(levels(stacking_df$Class))
+
 
 trainControl <- trainControl(method = "repeatedcv", number = 5, repeats = 3,
                              savePredictions = "all", classProbs = TRUE,
@@ -1379,11 +1384,615 @@ trainControl <- trainControl(method = "repeatedcv", number = 5, repeats = 3,
 # Run multiplealgorithms in one call.
 algorithm <- c("nnet","rf","svmRadial","gbm","xgbTree","hdda","LogitBoost")
 
+set.seed(86)
+models <- caretList(Class ~ ., data = stacking_df, 
+                    trControl = trainControl,
+                    methodList = algorithm)
 
-stacking_df <- cbind(x_train[,gbm_filter_anova_pvalue_50],x_train$Class)
-names(stacking_df) [51] <- "Class"
+results <- resamples(models)
+summary(results)
+
+# Box plots to compare models
+scales <- list(x = list(relation = "free"), y = list(relation = "free"))
+bwplot(results, scales = scales)
+
+# Ensemble the predictions of 'models' to form a new combined prediction based on glm
+set.seed(86)
+stack_glm <- caretStack(models, method = "glm")
+pred_stack_glm <- predict(stack_glm, newdata = x_test)
+levels(pred_stack_glm) <- c("1","2", "3")
+caret::confusionMatrix(pred_stack_glm ,y_test)
+
+
+
+#*******************************************************************************
+#*************************** ANOVA P-VALUE 500 features *************************
+#*******************************************************************************
+
+
+#===============================================================================
+#=========================== RANDOM FOREST ===================================== 
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(mtry = c(2, 5, 10, 50),
+                               min.node.size = c(2, 3, 4, 5, 10),
+                               splitrule = "gini")
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+x_train$Class <- as.factor(x_train$Class)
+
+set.seed(86)
+GBM_rf_pvalue_500 <- caret::train(
+  form = Class ~ .,
+  data = x_train[c("Class", gbm_filter_anova_pvalue_500)],
+  method = "ranger",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train,
+  num.trees = 500)
+
+saveRDS(object = GBM_rf_pvalue_500, file = "GBM_rf_pvalue_500.rds")
+registerDoMC(cores = 1)
+
+
+GBM_rf_pvalue_500
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(GBM_rf_pvalue_500, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the Random Forest model") +
+  guides(color = guide_legend(title = "mtry"),
+         shape = guide_legend(title = "mtry")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_GBM_rf_pvalue_500 <- predict(object = GBM_rf_pvalue_500, newdata = x_test)
+predic_GBM_rf_pvalue_500
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_GBM_rf_pvalue_500, y_test)
+
+
+#===============================================================================
+#=========================== SVM Kernel Radial =================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(sigma = c(0.0001, 0.001, 0.01),
+                               C = c(1, 10, 50, 100, 250, 500, 700, 1000))
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+GBM_svmrad_pvalue_500 <- caret::train(
+  form = Class ~ .,
+  data = x_train[c("Class", gbm_filter_anova_pvalue_500)],
+  method = "svmRadial",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train
+)
+
+saveRDS(object = GBM_svmrad_pvalue_500, file = "GBM_svmrad_pvalue_500.rds")
+registerDoMC(cores = 1)
+
+
+GBM_svmrad_pvalue_500
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(GBM_svmrad_pvalue_500, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the SVM model") +
+  guides(color = guide_legend(title = "Sigma"),
+         shape = guide_legend(title = "Sigma")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_GBM_svmrad_pvalue_500 <- predict(object = GBM_svmrad_pvalue_500, newdata = x_test)
+predic_GBM_svmrad_pvalue_500
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_GBM_svmrad_pvalue_500, y_test)
+
+
+#===============================================================================
+#=========================== Neural Network ====================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(size = c(5, 10, 15, 20, 40),
+                               decay = c(0.01, 0.1))
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+GBM_nnet_pvalue_500 <- caret::train(
+  form = Class ~ .,
+  data = x_train[c("Class", gbm_filter_anova_pvalue_500)],
+  method = "nnet",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train,
+  rang = c(-0.7, 0.7),
+  MaxNWts = 21000,
+  trace = FALSE
+)
+
+saveRDS(object = GBM_nnet_pvalue_500, file = "GBM_nnet_pvalue_500.rds")
+registerDoMC(cores = 1)
+
+GBM_nnet_pvalue_500
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(GBM_nnet_pvalue_500, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the Neural Net model") +
+  guides(color = guide_legend(title = "Decay"),
+         shape = guide_legend(title = "Decay")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_GBM_nnet_pvalue_500 <- predict(object = GBM_nnet_pvalue_500, newdata = x_test)
+predic_GBM_nnet_pvalue_500
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_GBM_nnet_pvalue_500, y_test)
+
+
+
+#===============================================================================
+#=========================== Gradient boosting =================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  shrinkage = c(0.01, 0.1, 0.3),
+  interaction.depth = c(1, 3, 5),
+  n.minobsinnode = c(5, 10, 15),
+  n.trees = c(500, 1000)
+  # bag.fraction = c(0.65, 0.8, 1), 
+  # optimal_trees = 0,               
+  # min_RMSE = 0,                    
+  # min_cor = 0
+)
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+GBM_gbm_pvalue_500 <- caret::train(
+  form = Class ~ .,
+  data = x_train[c("Class", gbm_filter_anova_pvalue_500)],
+  method = "gbm",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  preProcess = c("center", "scale"),
+  trControl = control_train
+)
+
+saveRDS(object = GBM_gbm_pvalue_500, file = "GBM_gbm_pvalue_500.rds")
+registerDoMC(cores = 1)
+
+GBM_gbm_pvalue_500
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(GBM_gbm_pvalue_100, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the GBM model") +
+  guides(color = guide_legend(title = "Size"),
+         shape = guide_legend(title = "Size")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_GBM_gbm_pvalue_500 <- predict(object = GBM_gbm_pvalue_500, newdata = x_test)
+predic_GBM_gbm_pvalue_500
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_GBM_gbm_pvalue_500, y_test)
+
+
+#===============================================================================
+#=========================== XGBM ==============================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  nrounds = c(500, 1000),
+  eta = c(0.01, 0.001), 
+  max_depth = c(2, 4, 6),
+  gamma = 1,
+  colsample_bytree = c(0.2, 0.4),
+  min_child_weight = c(1, 5),
+  subsample = 1
+)
+
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+GBM_xgbm_pvalue_500 <- caret::train(
+  form = Class ~ .,
+  data = x_train[c("Class", gbm_filter_anova_pvalue_500)],
+  method = "xgbTree",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  preProcess = c("center", "scale"),
+  trControl = control_train
+)
+
+saveRDS(object = GBM_xgbm_pvalue_500, file = "GBM_xgbm_pvalue_500.rds")
+registerDoMC(cores = 1)
+
+GBM_xgbm_pvalue_500
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+plot(GBM_xgbm_pvalue_500, highlight = TRUE)
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_GBM_xgbm_pvalue_500 <- predict(object = GBM_xgbm_pvalue_500, newdata = x_test)
+predic_GBM_xgbm_pvalue_500
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_GBM_xgbm_pvalue_500, y_test)
+
+
+#===============================================================================
+#=========================== glmnet ============================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  lambda = c(0, 1, 10, 100),
+  alpha = c (0.1, 0.01, 0.001)
+)
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+GBM_glmnet_pvalue_500 <- caret::train(
+  form = Class ~ .,
+  data = x_train[c("Class", gbm_filter_anova_pvalue_500)],
+  method = "glmnet",
+  family = "multinomial",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train
+)
+
+saveRDS(object = GBM_glmnet_pvalue_500, file = "GBM_glmnet_pvalue_500.rds")
+registerDoMC(cores = 1)
+
+GBM_glmnet_pvalue_500
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(GBM_glmnet_pvalue_500, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the GLMnet model") +
+  guides(color = guide_legend(title = "Alpha"),
+         shape = guide_legend(title = "Alpha")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_GBM_glmnet_pvalue_500 <- predict(object = GBM_glmnet_pvalue_500, newdata = x_test)
+predic_GBM_glmnet_pvalue_500
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_GBM_glmnet_pvalue_500, y_test)
+
+
+#===============================================================================
+#=========================== HDDA ==============================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  threshold = seq(0.1,0.9,by=0.1),
+  model = "ALL")
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+GBM_hdda_pvalue_500 <- caret::train(
+  form = Class ~ .,
+  data = x_train[c("Class", gbm_filter_anova_pvalue_500)],
+  method = "hdda",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train
+)
+
+saveRDS(object = GBM_hdda_pvalue_500, file = "GBM_hdda_pvalue_500.rds")
+registerDoMC(cores = 1)
+
+GBM_hdda_pvalue_500
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(GBM_hdda_pvalue_500, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the HDDA model") +
+  guides(color = guide_legend(title = "threshold"),
+         shape = guide_legend(title = "threshold")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_GBM_hdda_pvalue_500 <- predict(object = GBM_hdda_pvalue_500, newdata = x_test)
+predic_GBM_hdda_pvalue_500
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_GBM_hdda_pvalue_500, y_test)
+
+
+#===============================================================================
+#=========================== LogitBoost ========================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  nIter = c(25, 50, 100, 250)
+)
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+GBM_logitBoost_pvalue_500 <- caret::train(
+  form = Class ~ .,
+  data = x_train[c("Class", gbm_filter_anova_pvalue_500)],
+  method = "LogitBoost",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train
+)
+
+saveRDS(object = GBM_logitBoost_pvalue_500, file = "GBM_logitBoost_pvalue_500.rds")
+registerDoMC(cores = 1)
+
+GBM_logitBoost_pvalue_500
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(GBM_logitBoost_pvalue_500, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the Logitboost model") +
+  guides(color = guide_legend(title = "nIter"),
+         shape = guide_legend(title = "nIter")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_GBM_logitBoost_pvalue_500 <- predict(object = GBM_logitBoost_pvalue_500, newdata = x_test)
+predic_GBM_logitBoost_pvalue_500
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_GBM_logitBoost_pvalue_500, y_test)
+
+
+#===============================================================================
+#=========================== Stacking Ensemble  ================================
+#===============================================================================
+
+# DEFINICIÓN DEL ENTRENAMIENTO
+#===============================================================================
+
+stacking_df <- cbind(x_train[,gbm_filter_anova_pvalue_500],x_train$Class)
+names(stacking_df) [501] <- "Class"
 levels(stacking_df$Class)
 levels(stacking_df$Class) <- make.names(levels(stacking_df$Class))
+
+
+trainControl <- trainControl(method = "repeatedcv", number = 5, repeats = 3,
+                             savePredictions = "all", classProbs = TRUE,
+                             index = createFolds(stacking_df$Class, 5),verboseIter = TRUE)
+
+
+# Run multiplealgorithms in one call.
+algorithm <- c("nnet","rf","svmRadial","gbm","xgbTree","hdda","LogitBoost")
 
 set.seed(86)
 models <- caretList(Class ~ ., data = stacking_df, 
