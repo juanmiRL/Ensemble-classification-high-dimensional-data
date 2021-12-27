@@ -1,1 +1,1 @@
-# Ensemble-classification-high-dimensional-data
+# Ensemble methods for classification in high dimensional data
