@@ -955,7 +955,7 @@ registerDoMC(cores = 11)
 repetitions_boot <- 50
 
 # Hyperparameters
-hyperparameters <- expand.grid(size = c(5, 10, 15, 20, 40),
+hyperparameters <- expand.grid(size = c(4, 8, 10, 16),
                                decay = c(0.01, 0.1))
 
 set.seed(86)
@@ -1565,7 +1565,7 @@ registerDoMC(cores = 11)
 repetitions_boot <- 50
 
 # Hyperparameters
-hyperparameters <- expand.grid(size = c(5, 10, 15, 20, 40),
+hyperparameters <- expand.grid(size = c(2, 4, 6, 8, 10),
                                decay = c(0.01, 0.1))
 
 set.seed(86)
