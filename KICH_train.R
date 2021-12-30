@@ -2060,6 +2060,7 @@ plot(RFE_results, type=c("g", "o"))
 
 selected_vars <- RFE_results$variables
 write.csv(selected_vars, "KICH_selected_vars_RFE.csv")
+saveRDS(RFE_results, "KICH_RFE_results.rds")
 best_vars_50 <- RFE_results$control$functions$selectVar(selected_vars, 50)
 
 x_train_rfe_50 <- x_train[, c("Class", best_vars_50)] 
@@ -2114,7 +2115,7 @@ KICH_rf_RFE_50 <- caret::train(
   trControl = control_train,
   num.trees = 500)
 
-saveRDS(object = KICH_rf_RFE_50, file = "KICH_rf_pvalue_50.rds")
+saveRDS(object = KICH_rf_RFE_50, file = "KICH_rf_RFE_50.rds")
 registerDoMC(cores = 1)
 
 
@@ -2705,7 +2706,7 @@ ggplot(KICH_rf_RFE_100, highlight = TRUE) +
 
 # TEST PREDICTIONS
 # ==============================================================================
-predic_KICH_rf_RFE_100 <- predict(object = KICH_rf_RFE_100, newdata = x_test)
+predic_KICH_rf_RFE_100 <- predict(object = KICH_rf_RFE_100, newdata = x_test_rfe_100)
 predic_KICH_rf_RFE_100
 y_test <- as.factor(y_test)
 caret::confusionMatrix(predic_KICH_rf_RFE_100, y_test)
@@ -2773,7 +2774,7 @@ ggplot(KICH_svmrad_RFE_100, highlight = TRUE) +
 
 # TEST PREDICTIONS
 # ==============================================================================
-predic_KICH_svmrad_RFE_100 <- predict(object = KICH_svmrad_RFE_100, newdata = x_test)
+predic_KICH_svmrad_RFE_100 <- predict(object = KICH_svmrad_RFE_100, newdata = x_test_rfe_100)
 predic_KICH_svmrad_RFE_100
 y_test <- as.factor(y_test)
 caret::confusionMatrix(predic_KICH_svmrad_RFE_100, y_test)
@@ -2843,7 +2844,7 @@ ggplot(KICH_nnet_RFE_100, highlight = TRUE) +
 
 # TEST PREDICTIONS
 # ==============================================================================
-predic_KICH_nnet_RFE_100 <- predict(object = KICH_nnet_RFE_100, newdata = x_test)
+predic_KICH_nnet_RFE_100 <- predict(object = KICH_nnet_RFE_100, newdata = x_test_rfe_100)
 predic_KICH_nnet_RFE_100
 y_test <- as.factor(y_test)
 caret::confusionMatrix(predic_KICH_nnet_RFE_100, y_test)
@@ -2920,7 +2921,7 @@ ggplot(KICH_gbm_RFE_100, highlight = TRUE) +
 
 # TEST PREDICTIONS
 # ==============================================================================
-predic_KICH_gbm_RFE_100 <- predict(object = KICH_gbm_RFE_100, newdata = x_test)
+predic_KICH_gbm_RFE_100 <- predict(object = KICH_gbm_RFE_100, newdata = x_test_rfe_100)
 predic_KICH_gbm_RFE_100
 y_test <- as.factor(y_test)
 caret::confusionMatrix(predic_KICH_gbm_RFE_100, y_test)
@@ -2992,7 +2993,7 @@ plot(KICH_xgbm_RFE_100, highlight = TRUE)
 
 # TEST PREDICTIONS
 # ==============================================================================
-predic_KICH_xgbm_RFE_100 <- predict(object = KICH_xgbm_RFE_100, newdata = x_test)
+predic_KICH_xgbm_RFE_100 <- predict(object = KICH_xgbm_RFE_100, newdata = x_test_rfe_100)
 predic_KICH_xgbm_RFE_100
 y_test <- as.factor(y_test)
 caret::confusionMatrix(predic_KICH_xgbm_RFE_100, y_test)
@@ -3062,7 +3063,7 @@ ggplot(KICH_glmnet_RFE_100, highlight = TRUE) +
 
 # TEST PREDICTIONS
 # ==============================================================================
-predic_KICH_glmnet_RFE_100 <- predict(object = KICH_glmnet_RFE_100, newdata = x_test)
+predic_KICH_glmnet_RFE_100 <- predict(object = KICH_glmnet_RFE_100, newdata = x_test_rfe_100)
 predic_KICH_glmnet_RFE_100
 y_test <- as.factor(y_test)
 caret::confusionMatrix(predic_KICH_glmnet_RFE_100, y_test)
@@ -3130,7 +3131,7 @@ ggplot(KICH_hdda_RFE_100, highlight = TRUE) +
 
 # TEST PREDICTIONS
 # ==============================================================================
-predic_KICH_hdda_RFE_100 <- predict(object = KICH_hdda_RFE_100, newdata = x_test)
+predic_KICH_hdda_RFE_100 <- predict(object = KICH_hdda_RFE_100, newdata = x_test_rfe_100)
 predic_KICH_hdda_RFE_100
 y_test <- as.factor(y_test)
 caret::confusionMatrix(predic_KICH_hdda_RFE_100, y_test)
@@ -3198,7 +3199,7 @@ ggplot(KICH_logitBoost_RFE_100, highlight = TRUE) +
 
 # TEST PREDICTIONS
 # ==============================================================================
-predic_KICH_logitBoost_RFE_100 <- predict(object = KICH_logitBoost_RFE_100, newdata = x_test)
+predic_KICH_logitBoost_RFE_100 <- predict(object = KICH_logitBoost_RFE_100, newdata = x_test_rfe_100)
 predic_KICH_logitBoost_RFE_100
 y_test <- as.factor(y_test)
 caret::confusionMatrix(predic_KICH_logitBoost_RFE_100, y_test)
