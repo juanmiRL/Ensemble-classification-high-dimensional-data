@@ -30,6 +30,10 @@ library(doMC)
 library(fastAdaboost)
 library(xgboost)
 library(caretEnsemble)
+library(ROCit)
+library(precrec)
+library(pROC)
+library(Epi)
 
 ########################################################################
 ####################### Cervical Data ##################################
@@ -37,7 +41,7 @@ library(caretEnsemble)
 
 
 filepath <- system.file("extdata/cervical.txt", package = "MLSeq")
-cervical <- read.table(filepath, header=TRUE)
+cervical <- STAD.table(filepath, header=TRUE)
 head(cervical[ ,1:10])
 class <- DataFrame(condition = factor(rep(c("N","T"), c(29, 29))))
 
@@ -307,7 +311,7 @@ head(rowData(tcga_data))     # ensembl id and gene id of the first 6 genes.
 #         compress = FALSE)
 
 # load data with the next sentence
-tcga_data = readRDS(file = "tcga_data_STAD.RDS")
+tcga_data = STADRDS(file = "tcga_data_STAD.RDS")
 
 
 # Preprocessing 
@@ -472,7 +476,7 @@ resultados_anova_pvalue <- resultados_anova_pvalue %>%
   mutate(pvalue_medio = rowMeans(resultados_anova_pvalue[, -1])) %>%
   arrange(pvalue_medio)
 
-# Se guarda en disco el objeto creado para no tener que repetir de nuevo toda la
+# Se guarda en disco el objeto cSTADo para no tener que repetir de nuevo toda la
 # computación.
 saveRDS(object = resultados_anova_pvalue, file = "resultados_anova_pvalue.rds")
 
@@ -2233,7 +2237,7 @@ library(caretEnsemble)
 
 
 filepath <- system.file("extdata/cervical.txt", package = "MLSeq")
-cervical <- read.table(filepath, header=TRUE)
+cervical <- STAD.table(filepath, header=TRUE)
 head(cervical[ ,1:10])
 class <- DataFrame(condition = factor(rep(c("N","T"), c(29, 29))))
 
@@ -2503,7 +2507,7 @@ head(rowData(tcga_data))     # ensembl id and gene id of the first 6 genes.
 #         compress = FALSE)
 
 # load data with the next sentence
-tcga_data = readRDS(file = "tcga_data_STAD.RDS")
+tcga_data = STADRDS(file = "tcga_data_STAD.RDS")
 
 
 # Preprocessing 
@@ -2668,7 +2672,7 @@ resultados_anova_pvalue <- resultados_anova_pvalue %>%
   mutate(pvalue_medio = rowMeans(resultados_anova_pvalue[, -1])) %>%
   arrange(pvalue_medio)
 
-# Se guarda en disco el objeto creado para no tener que repetir de nuevo toda la
+# Se guarda en disco el objeto cSTADo para no tener que repetir de nuevo toda la
 # computación.
 saveRDS(object = resultados_anova_pvalue, file = "resultados_anova_pvalue.rds")
 
@@ -4389,5 +4393,1394 @@ levels(pred_stack_glm) <- c("1","2")
 caret::confusionMatrix(pred_stack_glm ,y_test)
 
 
+#*******************************************************************************
+#************************ Recursive Feature Elimination ************************
+#*******************************************************************************
 
+
+# sets a limit on the number of nested expressions 
+options(expressions = 500000)
+
+
+zero_var <- nearZeroVar(x_train)
+class_index <- which(colnames(x_train) == "Class")
+x <- findCorrelation(cor(x_train[, - class_index]), .8, verbose = TRUE)
+x_train_corr <- x_train[, x]
+x_train_corr <- cbind(x_train_corr, x_train$Class) 
+colnames(x_train_corr) [length(x_train_corr)] <- "Class"
+
+# define the control using a random forest selection function
+set.seed(86)
+rfe_control <- rfeControl(functions = rfFuncs, 
+                          method = "cv", 
+                          number = 10,
+                          repeats = 3,
+                          allowParallel = TRUE)
+
+# run the RFE algorithm
+RFE_results <- rfe(form = Class ~ . ,
+                   data = x_train_corr, 
+                   sizes = c(1:286), 
+                   rfeControl = rfe_control)
+
+# summarize the results
+print(RFE_results)
+
+# list the chosen features
+predictors(RFE_results)
+
+# plot the results
+plot(RFE_results, type=c("g", "o"))
+
+selected_vars <- RFE_results$variables
+write.csv(selected_vars, "STAD_selected_vars_RFE.csv")
+saveRDS(RFE_results, "STAD_RFE_results.rds")
+best_vars_50 <- RFE_results$control$functions$selectVar(selected_vars, 50)
+
+x_train_rfe_50 <- x_train[, c("Class", best_vars_50)] 
+x_test_rfe_50 <- x_test[, c("Class", best_vars_50)] 
+
+
+#===============================================================================
+#=========================== RANDOM FOREST ===================================== 
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(mtry = c(2, 5, 10, 50),
+                               min.node.size = c(2, 3, 4, 5, 10),
+                               splitrule = "gini")
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+x_train_rfe_50$Class <- as.factor(x_train_rfe_50$Class)
+
+set.seed(86)
+STAD_rf_RFE_50 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_50,
+  method = "ranger",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train,
+  num.trees = 500)
+
+saveRDS(object = STAD_rf_RFE_50, file = "STAD_rf_RFE_50.rds")
+registerDoMC(cores = 1)
+
+
+STAD_rf_RFE_50
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_rf_RFE_50, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the Random Forest model") +
+  guides(color = guide_legend(title = "mtry"),
+         shape = guide_legend(title = "mtry")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_rf_RFE_50 <- predict(object = STAD_rf_RFE_50, newdata = x_test_rfe_50)
+predic_STAD_rf_RFE_50
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_rf_RFE_50, y_test)
+
+
+#===============================================================================
+#=========================== SVM Kernel Radial =================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(sigma = c(0.0001, 0.001, 0.01),
+                               C = c(1, 10, 50, 100, 250, 500, 700, 1000))
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_svmrad_RFE_50 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_50,
+  method = "svmRadial",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train
+)
+
+saveRDS(object = STAD_svmrad_RFE_50, file = "STAD_svmrad_RFE_50.rds")
+registerDoMC(cores = 1)
+
+
+STAD_svmrad_RFE_50
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_svmrad_RFE_50, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the SVM model") +
+  guides(color = guide_legend(title = "Sigma"),
+         shape = guide_legend(title = "Sigma")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_svmrad_RFE_50 <- predict(object = STAD_svmrad_RFE_50, newdata = x_test_rfe_50)
+predic_STAD_svmrad_RFE_50
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_svmrad_RFE_50, y_test)
+
+
+#===============================================================================
+#=========================== Neural Network ====================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(size = c(2, 4, 8, 10, 16),
+                               decay = c(0.01, 0.1))
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_nnet_RFE_50 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_50,
+  method = "nnet",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train,
+  rang = c(-0.7, 0.7),
+  MaxNWts = 21000,
+  trace = FALSE
+)
+
+saveRDS(object = STAD_nnet_RFE_50, file = "STAD_nnet_RFE_50.rds")
+registerDoMC(cores = 1)
+
+STAD_nnet_RFE_50
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_nnet_RFE_50, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the Neural Net model") +
+  guides(color = guide_legend(title = "Decay"),
+         shape = guide_legend(title = "Decay")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_nnet_RFE_50 <- predict(object = STAD_nnet_RFE_50, newdata = x_test_rfe_50)
+predic_STAD_nnet_RFE_50
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_nnet_RFE_50, y_test)
+
+
+
+#===============================================================================
+#=========================== Gradient boosting =================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  shrinkage = c(0.01, 0.1, 0.3),
+  interaction.depth = c(1, 3, 5),
+  n.minobsinnode = c(5, 10, 15),
+  n.trees = c(500, 1000)
+  # bag.fraction = c(0.65, 0.8, 1), 
+  # optimal_trees = 0,               
+  # min_RMSE = 0,                    
+  # min_cor = 0
+)
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_gbm_RFE_50 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_50,
+  method = "gbm",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  preProcess = c("center", "scale"),
+  trControl = control_train
+)
+
+saveRDS(object = STAD_gbm_RFE_50, file = "STAD_gbm_RFE_50.rds")
+registerDoMC(cores = 1)
+
+STAD_gbm_RFE_50
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_gbm_RFE_50, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the GBM model") +
+  guides(color = guide_legend(title = "Shrinkage"),
+         shape = guide_legend(title = "Shrinkage")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_gbm_RFE_50 <- predict(object = STAD_gbm_RFE_50, newdata = x_test_rfe_50)
+predic_STAD_gbm_RFE_50
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_gbm_RFE_50, y_test)
+
+
+#===============================================================================
+#=========================== XGBM ==============================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  nrounds = c(500, 1000),
+  eta = c(0.01, 0.001), 
+  max_depth = c(2, 4, 6),
+  gamma = 1,
+  colsample_bytree = c(0.2, 0.4),
+  min_child_weight = c(1, 5),
+  subsample = 1
+)
+
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_xgbm_RFE_50 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_50,
+  method = "xgbTree",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  preProcess = c("center", "scale"),
+  trControl = control_train
+)
+
+saveRDS(object = STAD_xgbm_RFE_50, file = "STAD_xgbm_RFE_50.rds")
+registerDoMC(cores = 1)
+
+STAD_xgbm_RFE_50
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+plot(STAD_xgbm_RFE_50, highlight = TRUE)
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_xgbm_RFE_50 <- predict(object = STAD_xgbm_RFE_50, newdata = x_test_rfe_50)
+predic_STAD_xgbm_RFE_50
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_xgbm_RFE_50, y_test)
+
+
+#===============================================================================
+#=========================== glmnet ============================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  lambda = c(0, 1, 10, 100),
+  alpha = c (0.1, 0.01, 0.001)
+)
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_glmnet_RFE_50 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_50,
+  method = "glmnet",
+  family = "multinomial",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train
+)
+
+saveRDS(object = STAD_glmnet_RFE_50, file = "STAD_glmnet_RFE_50.rds")
+registerDoMC(cores = 1)
+
+STAD_glmnet_RFE_50
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_glmnet_RFE_50, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the GLMnet model") +
+  guides(color = guide_legend(title = "Alpha"),
+         shape = guide_legend(title = "Alpha")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_glmnet_RFE_50 <- predict(object = STAD_glmnet_RFE_50, newdata = x_test_rfe_50)
+predic_STAD_glmnet_RFE_50
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_glmnet_RFE_50, y_test)
+
+
+#===============================================================================
+#=========================== HDDA ==============================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  threshold = seq(0.1,0.9,by=0.1),
+  model = "ALL")
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_hdda_RFE_50 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_50,
+  method = "hdda",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train
+)
+
+saveRDS(object = STAD_hdda_RFE_50, file = "STAD_hdda_RFE_50.rds")
+registerDoMC(cores = 1)
+
+STAD_hdda_RFE_50
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_hdda_RFE_50, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the HDDA model") +
+  guides(color = guide_legend(title = "threshold"),
+         shape = guide_legend(title = "threshold")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_hdda_RFE_50 <- predict(object = STAD_hdda_RFE_50, newdata = x_test_rfe_50)
+predic_STAD_hdda_RFE_50
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_hdda_RFE_50, y_test)
+
+
+#===============================================================================
+#=========================== LogitBoost ========================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  nIter = c(25, 50, 100, 250)
+)
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_logitBoost_RFE_50 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_50,
+  method = "LogitBoost",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train
+)
+
+saveRDS(object = STAD_logitBoost_RFE_50, file = "STAD_logitBoost_RFE_50.rds")
+registerDoMC(cores = 1)
+
+STAD_logitBoost_RFE_50
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_logitBoost_RFE_50, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the Logitboost model") +
+  guides(color = guide_legend(title = "nIter"),
+         shape = guide_legend(title = "nIter")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_logitBoost_RFE_50 <- predict(object = STAD_logitBoost_RFE_50, newdata = x_test_rfe_50)
+predic_STAD_logitBoost_RFE_50
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_logitBoost_RFE_50, y_test)
+
+
+#*******************************************************************************
+#*************************** RFE 100 features **********************************
+#*******************************************************************************
+
+
+best_vars_100 <- RFE_results$control$functions$selectVar(selected_vars, 100)
+x_train_rfe_100 <- x_train[, c("Class", best_vars_100)] 
+x_test_rfe_100 <- x_test[, c("Class", best_vars_100)] 
+
+
+
+#===============================================================================
+#=========================== RANDOM FOREST ===================================== 
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(mtry = c(2, 5, 10, 50),
+                               min.node.size = c(2, 3, 4, 5, 10),
+                               splitrule = "gini")
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+x_train$Class <- as.factor(x_train$Class)
+
+set.seed(86)
+STAD_rf_RFE_100 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_100,
+  method = "ranger",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train,
+  num.trees = 500)
+
+saveRDS(object = STAD_rf_RFE_100, file = "STAD_rf_RFE_100.rds")
+registerDoMC(cores = 1)
+
+
+STAD_rf_RFE_100
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_rf_RFE_100, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the Random Forest model") +
+  guides(color = guide_legend(title = "mtry"),
+         shape = guide_legend(title = "mtry")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_rf_RFE_100 <- predict(object = STAD_rf_RFE_100, newdata = x_test_rfe_100)
+predic_STAD_rf_RFE_100
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_rf_RFE_100, y_test)
+
+
+#===============================================================================
+#=========================== SVM Kernel Radial =================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(sigma = c(0.0001, 0.001, 0.01),
+                               C = c(1, 10, 50, 100, 250, 500, 700, 1000))
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_svmrad_RFE_100 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_100,
+  method = "svmRadial",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train
+)
+
+saveRDS(object = STAD_svmrad_RFE_100, file = "STAD_svmrad_RFE_100.rds")
+registerDoMC(cores = 1)
+
+
+STAD_svmrad_RFE_100
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_svmrad_RFE_100, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the SVM model") +
+  guides(color = guide_legend(title = "Sigma"),
+         shape = guide_legend(title = "Sigma")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_svmrad_RFE_100 <- predict(object = STAD_svmrad_RFE_100, newdata = x_test_rfe_100)
+predic_STAD_svmrad_RFE_100
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_svmrad_RFE_100, y_test)
+
+
+#===============================================================================
+#=========================== Neural Network ====================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(size = c(2, 4, 8, 10, 16, 20),
+                               decay = c(0.01, 0.1))
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_nnet_RFE_100 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_100,
+  method = "nnet",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train,
+  rang = c(-0.7, 0.7),
+  MaxNWts = 21000,
+  trace = FALSE
+)
+
+saveRDS(object = STAD_nnet_RFE_100, file = "STAD_nnet_RFE_100.rds")
+registerDoMC(cores = 1)
+
+STAD_nnet_RFE_100
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_nnet_RFE_100, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the Neural Net model") +
+  guides(color = guide_legend(title = "Decay"),
+         shape = guide_legend(title = "Decay")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_nnet_RFE_100 <- predict(object = STAD_nnet_RFE_100, newdata = x_test_rfe_100)
+predic_STAD_nnet_RFE_100
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_nnet_RFE_100, y_test)
+
+
+
+#===============================================================================
+#=========================== Gradient boosting =================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  shrinkage = c(0.01, 0.1, 0.3),
+  interaction.depth = c(1, 3, 5),
+  n.minobsinnode = c(5, 10, 15),
+  n.trees = c(500, 1000)
+  # bag.fraction = c(0.65, 0.8, 1), 
+  # optimal_trees = 0,               
+  # min_RMSE = 0,                    
+  # min_cor = 0
+)
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_gbm_RFE_100 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_100,
+  method = "gbm",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  preProcess = c("center", "scale"),
+  trControl = control_train
+)
+
+saveRDS(object = STAD_gbm_RFE_100, file = "STAD_gbm_RFE_100.rds")
+registerDoMC(cores = 1)
+
+STAD_gbm_RFE_100
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_gbm_RFE_100, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the GBM model") +
+  guides(color = guide_legend(title = "Shrinkage"),
+         shape = guide_legend(title = "Shrinkage")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_gbm_RFE_100 <- predict(object = STAD_gbm_RFE_100, newdata = x_test_rfe_100)
+predic_STAD_gbm_RFE_100
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_gbm_RFE_100, y_test)
+
+
+#===============================================================================
+#=========================== XGBM ==============================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  nrounds = c(500, 1000),
+  eta = c(0.01, 0.001), 
+  max_depth = c(2, 4, 6),
+  gamma = 1,
+  colsample_bytree = c(0.2, 0.4),
+  min_child_weight = c(1, 5),
+  subsample = 1
+)
+
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_xgbm_RFE_100 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_100,
+  method = "xgbTree",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  preProcess = c("center", "scale"),
+  trControl = control_train
+)
+
+saveRDS(object = STAD_xgbm_RFE_100, file = "STAD_xgbm_RFE_100.rds")
+registerDoMC(cores = 1)
+
+STAD_xgbm_RFE_100
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+plot(STAD_xgbm_RFE_100, highlight = TRUE)
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_xgbm_RFE_100 <- predict(object = STAD_xgbm_RFE_100, newdata = x_test_rfe_100)
+predic_STAD_xgbm_RFE_100
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_xgbm_RFE_100, y_test)
+
+
+#===============================================================================
+#=========================== glmnet ============================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  lambda = c(0, 1, 10, 100),
+  alpha = c (0.1, 0.01, 0.001)
+)
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_glmnet_RFE_100 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_100,
+  method = "glmnet",
+  family = "multinomial",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train
+)
+
+saveRDS(object = STAD_glmnet_RFE_100, file = "STAD_glmnet_RFE_100.rds")
+registerDoMC(cores = 1)
+
+STAD_glmnet_RFE_100
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_glmnet_RFE_100, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the GLMnet model") +
+  guides(color = guide_legend(title = "Alpha"),
+         shape = guide_legend(title = "Alpha")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_glmnet_RFE_100 <- predict(object = STAD_glmnet_RFE_100, newdata = x_test_rfe_100)
+predic_STAD_glmnet_RFE_100
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_glmnet_RFE_100, y_test)
+
+
+#===============================================================================
+#=========================== HDDA ==============================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  threshold = seq(0.1,0.9,by=0.1),
+  model = "ALL")
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_hdda_RFE_100 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_100,
+  method = "hdda",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train
+)
+
+saveRDS(object = STAD_hdda_RFE_100, file = "STAD_hdda_RFE_100.rds")
+registerDoMC(cores = 1)
+
+STAD_hdda_RFE_100
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_hdda_RFE_100, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the HDDA model") +
+  guides(color = guide_legend(title = "threshold"),
+         shape = guide_legend(title = "threshold")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_hdda_RFE_100 <- predict(object = STAD_hdda_RFE_100, newdata = x_test_rfe_100)
+predic_STAD_hdda_RFE_100
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_hdda_RFE_100, y_test)
+
+
+#===============================================================================
+#=========================== LogitBoost ========================================
+#===============================================================================
+
+
+# PARALLEL PROCESS
+#===============================================================================
+
+#install.packages("doMC", repos="http://R-Forge.R-project.org")
+
+registerDoMC(cores = 11)
+
+# HYPERPARAMETERS, NUMBER OF REPETITIONS AND SEEDS FOR EACH REPEAT
+#===============================================================================
+repetitions_boot <- 50
+
+# Hyperparameters
+hyperparameters <- expand.grid(
+  nIter = c(25, 50, 100, 250)
+)
+
+set.seed(86)
+seeds <- vector(mode = "list", length = repetitions_boot + 1)
+for (i in 1:repetitions_boot) {
+  seeds[[i]] <- sample.int(1000, nrow(hyperparameters))
+}
+seeds[[repetitions_boot + 1]] <- sample.int(1000, 1)
+
+# DEFINITION OF TRAINING
+#===============================================================================
+control_train <- trainControl(method = "boot", number = repetitions_boot,
+                              seeds = seeds, returnResamp = "final",
+                              verboseIter = TRUE, allowParallel = TRUE)
+
+# FIT MODEL 
+# ==============================================================================
+
+set.seed(86)
+STAD_logitBoost_RFE_100 <- caret::train(
+  form = Class ~ .,
+  data = x_train_rfe_100,
+  method = "LogitBoost",
+  tuneGrid = hyperparameters,
+  metric = "Accuracy",
+  trControl = control_train
+)
+
+saveRDS(object = STAD_logitBoost_RFE_100, file = "STAD_logitBoost_RFE_100.rds")
+registerDoMC(cores = 1)
+
+STAD_logitBoost_RFE_100
+
+# GRAPHIC REPRESENTATION
+# ==============================================================================
+ggplot(STAD_logitBoost_RFE_100, highlight = TRUE) +
+  labs(title = "Evolution of the accuracy of the Logitboost model") +
+  guides(color = guide_legend(title = "nIter"),
+         shape = guide_legend(title = "nIter")) +
+  theme_bw()
+
+# TEST PREDICTIONS
+# ==============================================================================
+predic_STAD_logitBoost_RFE_100 <- predict(object = STAD_logitBoost_RFE_100, newdata = x_test_rfe_100)
+predic_STAD_logitBoost_RFE_100
+y_test <- as.factor(y_test)
+caret::confusionMatrix(predic_STAD_logitBoost_RFE_100, y_test)
+
+
+#===============================================================================
+#=========================== ROC curves ========================================
+#===============================================================================
+
+
+nnet_predict_obj <- mmdata(as.numeric(predic_nnet_pvalue_500),x_test$Class)
+nnet_performance <- evalmod(mdat = nnet_predict_obj) 
+
+hdda_predict_obj <- mmdata(as.numeric(predic_hdda_pvalue_50),x_test$Class)
+hdda_performance <- evalmod(mdat = hdda_predict_obj) 
+
+
+nnet_df <- fortify(nnet_performance)
+hdda_df <- fortify(hdda_performance)
+
+nnet_df$classifier <- "nnet"
+hdda_df$classifier <- "hdda"
+
+performance_df <- rbind(nnet_df, hdda_df)
+
+roc <- performance_df[performance_df$curvetype == "ROC",]
+
+ggplot(roc, aes(x=x, y=y, group = classifier)) + 
+  geom_line(aes(color = classifier)) +
+  xlab("1 - Specifity") +
+  ylab("Sensitivity") +
+  ggtitle("ROC curve") +
+  theme_minimal()
+
+# Another way to plot 
+#===================================================================
+
+
+nnet_predict_obj <- mmdata(as.numeric(predic_nnet_pvalue_500),x_test$Class)
+nnet_performance <- evalmod(mdat = nnet_predict_obj) 
+plot(nnet_performance)
+
+precrec_obj2 <- evalmod(scores = as.numeric(predic_nnet_pvalue_500), 
+                        labels = x_test$Class, mode="basic")
+plot(precrec_obj2)   
+
+
+# Another way to plot 
+#===================================================================
+
+ROCit_obj <- rocit(score = as.numeric(predic_nnet_pvalue_500), 
+                   class = x_test$Class)
+plot(ROCit_obj)
+
+
+ROCit_obj <- rocit(score = as.numeric(predic_hdda_pvalue_50), 
+                   class = x_test$Class)
+plot(ROCit_obj)
+ksplot(ROCit_obj)
+
+# Another way to plot 
+#===================================================================
+
+rocplot <- ggplot(df, aes(m = as.numeric(predic_hdda_pvalue_50), d = labels))+ geom_roc(n.cuts=20,labels=FALSE)
+rocplot + style_roc(theme = theme_grey) + geom_rocci(fill="pink") 
+
+
+# Another way to plot 
+#===================================================================
+
+ROC(test=predic_hdda_pvalue_50, stat=x_test$Class, plot="ROC", AUC=T, main="hdda")
+
+
+# Another way to plot 
+#===================================================================
+
+#' Generate an ROC curve plot with error bars showing 95 percent
+#' confidence intervals
+#'
+#' This code builds off of code written by Vincent Guillemot found here:
+#' \url{https://rpubs.com/vguillem/465086}.
+#'
+#' @param df The df as a data.frame.
+#' @param outcome A character string containing the name of the column
+#'   containing the outcomes (expressed as 0/1s).
+#' @param prediction A character string containing the name of the column
+#'   containing the predictions.
+#' @param ci Show confidence interval ribbon.
+#'   Defaults to FALSE.
+#' @param plot_title A character string containing the title for the resulting
+#'   plot.
+#' @return A ggplot containing the calibration plot
+#' @examples
+#' data(single_model_dataset)
+#' roc_plot(single_model_dataset, outcome = 'outcomes', prediction = 'predictions', ci = TRUE)
+#' @export
+
+roc_plot <- function(df, outcome, prediction, ci = FALSE, plot_title = '') {
+  obj <- pROC::roc_(df, response = outcome, predictor = prediction, ci = ci, plot=FALSE)
+  ciobj <- pROC::ci.se(obj, specificities = seq(0, 1, l = 25))
+  dat.ci <- data.frame(x = as.numeric(rownames(ciobj)),
+                       lower = ciobj[, 1],
+                       upper = ciobj[, 3])
+  
+  g1 = pROC::ggroc(obj) +
+    ggplot2::theme_minimal() +
+    ggplot2::geom_abline(
+      slope = 1,
+      intercept = 1,
+      linetype = "dashed",
+      alpha = 0.7,
+      color = "grey"
+    ) +
+    ggplot2::coord_equal() +
+    ggplot2::ggtitle(plot_title) + 
+    ggplot2::xlab("1 - Specificity") + 
+    ggplot2::ylab("Sensitivity")
+  
+  if(ci){
+    g2 = g1 + ggplot2::geom_ribbon(
+      data = dat.ci,
+      ggplot2::aes(x = x, ymin = lower, ymax = upper),
+      # fill = "steelblue",
+      alpha = 0.2
+    )
+  } else g2 = g1
+  g2
+}
+
+#' Generate an ROC curve plot with error bars showing 95 percent
+#' confidence intervals
+#' @param df The df as a data.frame.
+#' @param outcome A character string containing the name of the column
+#'   containing the outcomes (expressed as 0/1s).
+#' @param prediction A character string containing the name of the column
+#'   containing the predictions.
+#' @param model A character string containing the name of the column
+#'   containing the model label.
+#' @param ci Show confidence interval ribbon.
+#'   Defaults to FALSE.
+#' @param plot_title A character string containing the title for the resulting
+#'   plot.
+#' @return A ggplot containing the ROC plot
+#' @examples
+#' data(multi_model_dataset)
+#' roc_plot_multi(multi_model_dataset, outcome = 'outcomes', prediction = 'predictions', model = 'model_name', ci = TRUE)
+#' @export
+roc_plot_multi <- function(df, outcome, prediction, model, ci = FALSE, plot_title = '') {
+  
+  how_many_models = df[[model]] %>% unique() %>% length()
+  
+  ci_data = df %>%
+    dplyr::group_by(!!rlang::parse_expr(model)) %>%
+    dplyr::group_nest() %>%
+    dplyr::mutate(roc = purrr::map(data, ~ pROC::roc_(data = ., response = outcome, predictor = prediction, ci = ci, plot=FALSE)),
+                  roc = roc %>% setNames(!!rlang::parse_expr(model)),
+                  ci_spec = purrr::map(roc, ~ pROC::ci.se(., specificities = seq(0, 1, l = 25))),
+                  ci_ribbon = purrr::map(ci_spec, ~ build_ci_data(.)))
+  
+  # build ROC curves
+  g1 = pROC::ggroc(ci_data$roc) +
+    ggplot2::theme_minimal() +
+    ggplot2::geom_abline(
+      slope = 1,
+      intercept = 1,
+      linetype = "dashed",
+      alpha = 0.7,
+      color = "grey"
+    ) +
+    ggplot2::coord_equal() +
+    ggplot2::scale_color_brewer(name = 'Models', palette = 'Set1') +
+    ggplot2::scale_fill_brewer(name = 'Models', palette = 'Set1') +
+    ggplot2::ggtitle(plot_title) + 
+    ggplot2::xlab("Specificity") + 
+    ggplot2::ylab("Sensitivity")
+  
+  # build CI intervals
+  if(ci){
+    ribbon = ci_data %>%
+      dplyr::select(!!rlang::parse_expr(model), ci_ribbon) %>%
+      dplyr::rename(name = !!rlang::parse_expr(model)) %>%
+      tidyr::unnest_wider(ci_ribbon) %>%
+      tidyr::unnest(cols = c(x, lower, upper))
+    
+    # ci_values = ci_data %>%
+    #   dplyr::select(model_name, roc) %>%
+    #   dplyr::mutate(ci = purrr::map(roc, ~ .$ci)) %>%
+    #   dplyr::select(-roc)
+    
+    ci_values = ci_data %>%
+      dplyr::select(!!rlang::parse_expr(model), roc) %>%
+      dplyr::mutate(ci = purrr::map(roc, ~ pROC::ci(.)))
+    
+    g2 = g1 + ggplot2::geom_ribbon(data = ribbon,
+                                   ggplot2::aes(fill = name, x = x, ymin = lower, ymax = upper),
+                                   alpha = 1/how_many_models,
+                                   inherit.aes = FALSE)
+  } else g2 = g1
+  g2
+}
+
+build_ci_data = function(obj){
+  data.frame(x = as.numeric(rownames(obj)),
+             lower = obj[, 1],
+             upper = obj[, 3])
+}
+
+
+df <- data.frame(predictions = as.numeric(predic_hdda_pvalue_50), outcomes = x_test$Class)
+roc_plot(df, outcome = 'outcomes', prediction = 'predictions', ci = TRUE, plot_title = "ROC Curve")
 
